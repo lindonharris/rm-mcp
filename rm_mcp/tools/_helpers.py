@@ -21,7 +21,7 @@ from rm_mcp.api import (  # noqa: F401
     REMARKABLE_TOKEN,
     get_file_type,
 )
-from rm_mcp.cache import get_cached_collection  # noqa: F401
+from rm_mcp.cache import cache_zip, get_cached_collection, get_cached_zip  # noqa: F401
 from rm_mcp.extract import (  # noqa: F401
     cache_page_ocr,
     extract_text_from_document_zip,
@@ -51,6 +51,23 @@ from rm_mcp.paths import (  # noqa: F401
 from rm_mcp.responses import make_error, make_response  # noqa: F401
 
 # --- Helper functions ---
+
+
+def _download_doc(client, doc) -> bytes:
+    """Download a document zip, using the content-addressed zip cache.
+
+    doc.hash changes when the document changes, so cached zips are always
+    valid for the current document version. FIFO eviction at 10 entries.
+    """
+    doc_hash = getattr(doc, "hash", None)
+    if doc_hash:
+        cached = get_cached_zip(doc_hash)
+        if cached is not None:
+            return cached
+    raw = client.download(doc)
+    if doc_hash:
+        cache_zip(doc_hash, raw)
+    return raw
 
 
 def is_compact(compact_output: bool = False) -> bool:

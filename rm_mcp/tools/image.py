@@ -98,7 +98,7 @@ async def remarkable_image(
             return doc_path  # doc_path contains the error JSON
 
         # Download the document
-        raw_doc = client.download(target_doc)
+        raw_doc = _helpers._download_doc(client, target_doc)
         with _helpers._temp_document(raw_doc) as tmp_path:
             # Validate format parameter
             format_lower = output_format.lower()

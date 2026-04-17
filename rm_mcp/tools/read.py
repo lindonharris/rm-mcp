@@ -110,7 +110,7 @@ async def remarkable_read(
                     total_notebook_pages = _idx.get_page_count(target_doc.ID) if _idx else None
                     if not total_notebook_pages:
                         # Index doesn't have count yet — download to get it
-                        raw_doc = client.download(target_doc)
+                        raw_doc = _helpers._download_doc(client, target_doc)
                         with _helpers._temp_document(raw_doc) as tmp_path:
                             total_notebook_pages = _helpers.get_document_page_count(tmp_path)
                         # Store for future cache hits
@@ -123,7 +123,7 @@ async def remarkable_read(
                     ocr_backend_used = "sampling"
                 else:
                     # No cache — render and OCR just the requested page
-                    raw_doc = client.download(target_doc)
+                    raw_doc = _helpers._download_doc(client, target_doc)
                     with _helpers._temp_document(raw_doc) as tmp_path:
                         total_notebook_pages = _helpers.get_document_page_count(tmp_path)
 
@@ -160,7 +160,7 @@ async def remarkable_read(
 
             # If not using sampling OCR, perform standard extraction
             if not notebook_pages and is_notebook:
-                raw_doc = client.download(target_doc)
+                raw_doc = _helpers._download_doc(client, target_doc)
                 with _helpers._temp_document(raw_doc) as tmp_path:
                     content = _helpers.extract_text_from_document_zip(
                         tmp_path, include_ocr=include_ocr, doc_id=target_doc.ID
@@ -175,7 +175,7 @@ async def remarkable_read(
             if not (is_notebook and notebook_pages):
                 if content is None:
                     # Need to extract if we haven't already
-                    raw_doc = client.download(target_doc)
+                    raw_doc = _helpers._download_doc(client, target_doc)
                     with _helpers._temp_document(raw_doc) as tmp_path:
                         content = _helpers.extract_text_from_document_zip(
                             tmp_path, include_ocr=include_ocr, doc_id=target_doc.ID

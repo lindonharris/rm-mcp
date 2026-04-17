@@ -340,3 +340,26 @@ _file_type_cache: Dict[str, str] = {}
 # =============================================================================
 
 _rendered_image_cache: Dict[str, str] = {}  # key: f"{doc_id}:{page}" -> base64 PNG
+
+
+# =============================================================================
+# Document zip cache (content-addressed by doc.hash)
+# =============================================================================
+
+# doc.hash is content-addressed — safe to cache indefinitely within a session.
+# Keyed by hash so a modified document automatically gets a different cache slot.
+_MAX_ZIP_CACHE_SIZE = 10  # Keep last 10 documents in memory (~50-500MB depending on sizes)
+_zip_cache: Dict[str, bytes] = {}  # key: doc.hash -> zip bytes
+
+
+def get_cached_zip(doc_hash: str) -> Optional[bytes]:
+    """Return cached zip bytes for a document by its content hash, or None."""
+    return _zip_cache.get(doc_hash)
+
+
+def cache_zip(doc_hash: str, zip_bytes: bytes) -> None:
+    """Cache zip bytes for a document by its content hash (FIFO eviction)."""
+    if len(_zip_cache) >= _MAX_ZIP_CACHE_SIZE:
+        oldest = next(iter(_zip_cache))
+        del _zip_cache[oldest]
+    _zip_cache[doc_hash] = zip_bytes

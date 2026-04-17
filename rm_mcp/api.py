@@ -25,12 +25,31 @@ def get_rmapi() -> Optional[RemarkableClientProtocol]:
 
     Uses a singleton pattern so the client is only created once per process.
     Returns None if no token is configured (unauthenticated mode).
+
+    SSH mode: if REMARKABLE_SSH_HOST is set, attempts direct SSH connection to
+    the tablet (bypasses Cloud API). Falls back to cloud client if unreachable.
     """
     global _client_singleton
 
     # Return cached client if available
     if _client_singleton is not None:
         return _client_singleton
+
+    # SSH mode: direct tablet access (faster, no cloud roundtrip)
+    ssh_host = os.environ.get("REMARKABLE_SSH_HOST", "").strip()
+    if ssh_host:
+        ssh_user = os.environ.get("REMARKABLE_SSH_USER", "root")
+        from rm_mcp.clients.ssh import SSHRemarkableClient
+
+        client = SSHRemarkableClient(host=ssh_host, user=ssh_user)
+        if client.is_available():
+            logger.info(f"SSH mode: connected to reMarkable at {ssh_host}")
+            _client_singleton = client
+            return _client_singleton
+        else:
+            logger.warning(
+                f"SSH mode: tablet not reachable at {ssh_host}, falling back to cloud API"
+            )
 
     # Cloud API mode
     from rm_mcp.clients.cloud import load_client_from_token

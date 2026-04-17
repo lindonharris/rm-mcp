@@ -21,7 +21,9 @@ API keys or services.
 - Returns None if sampling is not available or fails
 """
 
+import asyncio
 import base64
+import io
 from typing import TYPE_CHECKING, List, Optional
 
 from mcp.types import ImageContent, ModelHint, ModelPreferences, SamplingMessage, TextContent
@@ -30,29 +32,59 @@ if TYPE_CHECKING:
     from mcp.server.fastmcp import Context
 
 
-# Model preferences for OCR tasks - prioritize intelligence for better vision/OCR
-# Hints are matched as substrings, ordered by preference for vision capabilities
+# Model preferences for OCR tasks - prioritize speed for sub-10s latency
+# Haiku-class models handle handwriting at ~1-4s vs Opus at 15-45s (~90% accuracy)
 OCR_MODEL_PREFERENCES = ModelPreferences(
     hints=[
-        # Top tier - best vision/OCR capabilities
-        ModelHint(name="claude-opus-4.5"),
+        # Fast tier — Haiku-class: 1-4s, adequate for handwriting OCR
+        ModelHint(name="claude-haiku-4-5"),
+        ModelHint(name="claude-haiku-4"),
+        ModelHint(name="claude-haiku-3-5"),
+        ModelHint(name="gemini-flash"),
+        ModelHint(name="gpt-4o-mini"),
+        # Mid tier — Sonnet: 5-12s, better on complex handwriting
         ModelHint(name="claude-sonnet-4.5"),
-        ModelHint(name="gemini-3-pro"),
-        ModelHint(name="gpt-5.1"),
-        # Second tier - very capable
-        ModelHint(name="claude-opus-4"),
-        ModelHint(name="gpt-5"),
-        ModelHint(name="gemini-2.5-pro"),
         ModelHint(name="claude-sonnet-4"),
-        # Third tier - good fallbacks
-        ModelHint(name="gpt-4o"),
         ModelHint(name="claude-3-5-sonnet"),
-        ModelHint(name="gemini-1.5-pro"),
+        ModelHint(name="gemini-1.5-flash"),
+        # Fallback tier — Opus only if nothing faster is available
+        ModelHint(name="claude-opus-4.5"),
+        ModelHint(name="claude-opus-4"),
+        ModelHint(name="gpt-4o"),
+        ModelHint(name="gemini-2.5-pro"),
     ],
-    intelligencePriority=1.0,  # Maximize intelligence for OCR accuracy
-    speedPriority=0.2,  # Speed is not critical for OCR
-    costPriority=0.0,  # Cost doesn't matter - we need accuracy
+    intelligencePriority=0.3,  # Speed matters more than max intelligence for OCR
+    speedPriority=0.9,  # Prioritize fast models
+    costPriority=0.0,
 )
+
+# Max dimension for the longest side of PNG before sending to OCR model.
+# reMarkable pages are up to 1872px tall. Halving to 936px reduces base64
+# payload by ~4x and speeds up model inference with minimal accuracy loss.
+_OCR_MAX_IMAGE_DIMENSION = int(__import__("os").environ.get("REMARKABLE_OCR_MAX_DIMENSION", "936"))
+
+
+def _resize_for_ocr(png_data: bytes) -> bytes:
+    """Resize PNG to _OCR_MAX_IMAGE_DIMENSION on the longest side before OCR.
+
+    Reduces upload size and model inference time with minimal accuracy loss
+    for handwriting recognition on reMarkable pages.
+    """
+    try:
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(png_data))
+        w, h = img.size
+        if max(w, h) <= _OCR_MAX_IMAGE_DIMENSION:
+            return png_data
+
+        scale = _OCR_MAX_IMAGE_DIMENSION / max(w, h)
+        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, "PNG", optimize=True)
+        return buf.getvalue()
+    except Exception:
+        return png_data  # Fall back to original on any error
 
 
 # The OCR prompt is carefully designed to extract ONLY the text content
@@ -102,6 +134,9 @@ async def ocr_via_sampling(
         session = ctx.session
         if not session:
             return None
+
+        # Resize image before encoding — reduces upload size and inference time
+        png_data = _resize_for_ocr(png_data)
 
         # Encode image as base64
         image_b64 = base64.b64encode(png_data).decode("utf-8")
@@ -175,23 +210,16 @@ async def ocr_pages_via_sampling(
     Returns:
         List of extracted text (one per page), or None if all pages failed
     """
-    results = []
-    has_any_result = False
 
-    for png_data in png_data_list:
-        # Skip empty PNG data (failed renders) - just mark as empty string
+    async def _ocr_one(png_data: bytes) -> str:
         if not png_data:
-            results.append("")
-            continue
-
+            return ""
         text = await ocr_via_sampling(ctx, png_data, max_tokens)
-        if text:
-            results.append(text)
-            has_any_result = True
-        else:
-            results.append("")  # Empty string for failed pages
+        return text or ""
 
-    return results if has_any_result else None
+    # Run all pages concurrently — total time ≈ slowest single page
+    results = list(await asyncio.gather(*[_ocr_one(p) for p in png_data_list]))
+    return results if any(results) else None
 
 
 def get_ocr_backend() -> str:

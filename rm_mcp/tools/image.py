@@ -241,14 +241,19 @@ async def remarkable_image(
                 ocr_backend_used = None
                 ocr_message = None
                 if include_ocr:
-                    # Try sampling-based OCR if configured and available
-                    # This sends the image to the client's LLM to extract text
                     if ctx and _helpers.should_use_sampling_ocr(ctx):
-                        ocr_text = await _helpers.ocr_via_sampling(ctx, png_data)
-                        if ocr_text:
-                            ocr_backend_used = "sampling"
+                        # Check L1 + L2 cache before running OCR
+                        ocr_text = _helpers.get_cached_page_ocr(target_doc.ID, page, "sampling")
+                        if ocr_text is not None:
+                            ocr_backend_used = "sampling (cached)"
                         else:
-                            ocr_message = "No text detected in image"
+                            ocr_text = await _helpers.ocr_via_sampling(ctx, png_data)
+                            if ocr_text:
+                                ocr_backend_used = "sampling"
+                                # Persist so future calls skip OCR
+                                _helpers.cache_page_ocr(target_doc.ID, page, "sampling", ocr_text)
+                            else:
+                                ocr_message = "No text detected in image"
                     else:
                         ocr_message = "OCR unavailable (client does not support sampling)"
 

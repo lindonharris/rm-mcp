@@ -103,18 +103,26 @@ async def remarkable_read(
                 # Check per-page cache first
                 cached_text = _helpers.get_cached_page_ocr(target_doc.ID, page, "sampling")
                 if cached_text is not None:
-                    # We have cached OCR for this page
-                    # Still need to get total page count
-                    raw_doc = client.download(target_doc)
-                    with _helpers._temp_document(raw_doc) as tmp_path:
-                        total_notebook_pages = _helpers.get_document_page_count(tmp_path)
+                    # Cache hit — get page count from index to avoid cloud download
+                    from rm_mcp.index import get_instance as _get_index
+
+                    _idx = _get_index()
+                    total_notebook_pages = _idx.get_page_count(target_doc.ID) if _idx else None
+                    if not total_notebook_pages:
+                        # Index doesn't have count yet — download to get it
+                        raw_doc = client.download(target_doc)
+                        with _helpers._temp_document(raw_doc) as tmp_path:
+                            total_notebook_pages = _helpers.get_document_page_count(tmp_path)
+                        # Store for future cache hits
+                        if _idx:
+                            _idx.upsert_document(target_doc.ID, page_count=total_notebook_pages)
 
                     # Build notebook_pages list with just the cached page
                     notebook_pages = [""] * total_notebook_pages
                     notebook_pages[page - 1] = cached_text
                     ocr_backend_used = "sampling"
                 else:
-                    # No cache - render and OCR just the requested page
+                    # No cache — render and OCR just the requested page
                     raw_doc = client.download(target_doc)
                     with _helpers._temp_document(raw_doc) as tmp_path:
                         total_notebook_pages = _helpers.get_document_page_count(tmp_path)
@@ -135,8 +143,16 @@ async def remarkable_read(
                             # OCR the single page
                             ocr_text = await _helpers.ocr_via_sampling(ctx, png_data)
                             if ocr_text:
-                                # Cache the result
+                                # Cache the result for future reads
                                 _helpers.cache_page_ocr(target_doc.ID, page, "sampling", ocr_text)
+                                # Store page count so next cache hit skips download
+                                from rm_mcp.index import get_instance as _get_index
+
+                                _idx = _get_index()
+                                if _idx:
+                                    _idx.upsert_document(
+                                        target_doc.ID, page_count=total_notebook_pages
+                                    )
                                 # Build notebook_pages list
                                 notebook_pages = [""] * total_notebook_pages
                                 notebook_pages[page - 1] = ocr_text

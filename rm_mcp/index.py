@@ -192,6 +192,14 @@ class DocumentIndex:
         )
         conn.commit()
 
+    def get_page_count(self, doc_id: str) -> Optional[int]:
+        """Get stored page count for a document (avoids zip download on cache hits)."""
+        conn = self._get_connection()
+        row = conn.execute(
+            "SELECT page_count FROM documents WHERE doc_id = ?", (doc_id,)
+        ).fetchone()
+        return row["page_count"] if row and row["page_count"] is not None else None
+
     def get_document_hash(self, doc_id: str) -> Optional[str]:
         """Get the stored hash for a document."""
         conn = self._get_connection()

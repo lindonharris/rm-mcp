@@ -201,8 +201,16 @@ async def _prefetch_loop(shutdown_event: asyncio.Event) -> None:
                     break
 
                 try:
-                    # Download in executor (blocking network IO)
-                    raw = await loop.run_in_executor(None, lambda d=doc: client.download(d))
+                    # Download in executor (blocking network IO).
+                    # Populate the zip cache so the tool-call hot path skips the download.
+                    from rm_mcp.cache import cache_zip, get_cached_zip
+
+                    doc_hash = getattr(doc, "hash", None)
+                    raw = doc_hash and get_cached_zip(doc_hash)
+                    if not raw:
+                        raw = await loop.run_in_executor(None, lambda d=doc: client.download(d))
+                        if doc_hash:
+                            cache_zip(doc_hash, raw)
 
                     with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
                         tmp.write(raw)

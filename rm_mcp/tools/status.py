@@ -1,5 +1,7 @@
 """remarkable_status tool — check connection and authentication."""
 
+import os
+
 from rm_mcp.server import mcp
 from rm_mcp.tools import _helpers
 
@@ -11,7 +13,7 @@ def remarkable_status(compact_output: bool = False) -> str:
     <instructions>
     Returns authentication status and diagnostic information.
     Use this to verify your connection or troubleshoot issues.
-    Includes index statistics when available.
+    Includes index statistics, SSH mode status, and prefetch pipeline status when available.
     </instructions>
     <examples>
     - remarkable_status()
@@ -19,8 +21,15 @@ def remarkable_status(compact_output: bool = False) -> str:
     </examples>
     """
     compact = _helpers.is_compact(compact_output)
-    transport = "cloud"
-    connection_info = "environment variable" if _helpers.REMARKABLE_TOKEN else "file (~/.rmapi)"
+
+    # Detect transport mode
+    ssh_host = os.environ.get("REMARKABLE_SSH_HOST", "").strip()
+    if ssh_host:
+        transport = "ssh"
+        connection_info = f"SSH to {ssh_host}"
+    else:
+        transport = "cloud"
+        connection_info = "environment variable" if _helpers.REMARKABLE_TOKEN else "file (~/.rmapi)"
 
     try:
         client, collection = _helpers.get_cached_collection()
@@ -60,6 +69,43 @@ def remarkable_status(compact_output: bool = False) -> str:
             "compact_mode": _helpers.is_compact(),
         }
 
+        # Add OCR model preferences summary
+        try:
+            from rm_mcp.ocr.sampling import OCR_MODEL_PREFERENCES
+
+            hints = [h.name for h in (OCR_MODEL_PREFERENCES.hints or []) if h.name]
+            result["ocr_model_priority"] = hints[:3] if hints else []
+            result["ocr_speed_priority"] = OCR_MODEL_PREFERENCES.speedPriority
+        except Exception:
+            pass
+
+        # Add prefetch pipeline status
+        prefetch_enabled = os.environ.get("REMARKABLE_PREFETCH_ENABLED", "0").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        prefetch_info: dict = {"enabled": prefetch_enabled}
+        if prefetch_enabled:
+            try:
+                interval = int(os.environ.get("REMARKABLE_PREFETCH_INTERVAL", "60"))
+                max_docs = int(os.environ.get("REMARKABLE_PREFETCH_MAX_DOCS", "10"))
+                from rm_mcp.prefetch import _get_png_cache_dir
+
+                cache_dir = _get_png_cache_dir()
+                cached_docs = len(list(cache_dir.glob("*"))) if cache_dir.exists() else 0
+                prefetch_info.update(
+                    {
+                        "interval_seconds": interval,
+                        "max_docs_per_cycle": max_docs,
+                        "cache_dir": str(cache_dir),
+                        "cached_documents": cached_docs,
+                    }
+                )
+            except Exception:
+                pass
+        result["prefetch"] = prefetch_info
+
         # Add index stats if available
         try:
             from rm_mcp.index import get_instance
@@ -79,6 +125,13 @@ def remarkable_status(compact_output: bool = False) -> str:
         hint_parts = [f"Connected successfully via {transport}. Found {doc_count} documents."]
         if root != "/":
             hint_parts.append(f"Filtered to root: {root}")
+        if transport == "ssh":
+            hint_parts.append(
+                f"Using SSH direct access ({ssh_host}) — bypasses cloud for low latency."
+            )
+        if prefetch_enabled:
+            cached = result.get("prefetch", {}).get("cached_documents", 0)
+            hint_parts.append(f"Prefetch pipeline active: {cached} document(s) pre-rendered.")
         if "index_coverage" in result:
             hint_parts.append(f"Index coverage: {result['index_coverage']}.")
         hint_parts.append(

@@ -216,9 +216,14 @@ async def remarkable_image(
                         )
                         return [info, image]
 
-                png_data = _helpers.render_page_from_document_zip(
-                    tmp_path, page, background_color=background
-                )
+                # Check pre-fetch disk cache before rendering
+                from rm_mcp.prefetch import get_prefetched_png
+
+                png_data = get_prefetched_png(target_doc.ID, page)
+                if png_data is None:
+                    png_data = _helpers.render_page_from_document_zip(
+                        tmp_path, page, background_color=background
+                    )
 
                 if png_data is None:
                     return _helpers.make_error(

@@ -137,8 +137,12 @@ async def remarkable_read(
                                 compact=compact,
                             )
 
-                        # Render just the requested page
-                        png_data = _helpers.render_page_from_document_zip(tmp_path, page)
+                        # Check pre-fetch disk cache before rendering
+                        from rm_mcp.prefetch import get_prefetched_png
+
+                        png_data = get_prefetched_png(target_doc.ID, page)
+                        if png_data is None:
+                            png_data = _helpers.render_page_from_document_zip(tmp_path, page)
                         if png_data:
                             # OCR the single page
                             ocr_text = await _helpers.ocr_via_sampling(ctx, png_data)

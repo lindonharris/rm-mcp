@@ -110,6 +110,7 @@ async def lifespan(app: FastMCP) -> AsyncIterator[None]:
     """Lifespan context manager for the MCP server."""
     # Initialize the persistent document index (L2 cache)
     from rm_mcp import index as _index_mod
+    from rm_mcp.prefetch import start_prefetch_pipeline, stop_prefetch_pipeline
     from rm_mcp.resources import (
         start_background_loader,
         stop_background_loader,
@@ -122,23 +123,24 @@ async def lifespan(app: FastMCP) -> AsyncIterator[None]:
             logger.info("REMARKABLE_INDEX_REBUILD set — clearing index")
             idx.clear()
 
-    # Check if authenticated before starting background loader
+    # Check if authenticated before starting background tasks
     from rm_mcp.api import get_rmapi
 
     client = get_rmapi()
     if client is not None:
-        logger.info("Cloud mode: starting background loader...")
+        logger.info("Starting background loader...")
         task = start_background_loader()
+        prefetch_task = start_prefetch_pipeline()  # no-op if REMARKABLE_PREFETCH_ENABLED != 1
     else:
-        logger.warning("Background loader skipped (not authenticated)")
+        logger.warning("Background tasks skipped (not authenticated)")
         task = None
+        prefetch_task = None
 
     try:
         yield
     finally:
-        # Stop background loader on shutdown (if running)
+        await stop_prefetch_pipeline(prefetch_task)
         await stop_background_loader(task)
-        # Close the document index
         _index_mod.close()
 
 

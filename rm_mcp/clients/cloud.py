@@ -105,8 +105,14 @@ class RemarkableClient:
         return response
 
     def _get_file(self, file_hash: str) -> bytes:
-        """Download a file by its hash."""
+        """Download a file by its hash. Retries once on 429 with a short backoff."""
+        import time as _time
+
         response = self._request(f"{FILES_URL}/{file_hash}")
+        if response.status_code == 429:
+            retry_after = int(response.headers.get("Retry-After", "5"))
+            _time.sleep(min(retry_after, 10))
+            response = self._request(f"{FILES_URL}/{file_hash}")
         response.raise_for_status()
         return response.content
 

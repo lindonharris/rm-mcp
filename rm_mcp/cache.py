@@ -118,6 +118,19 @@ def _save_disk_collection_cache(collection: list, root_hash: Optional[str]) -> N
         if not items:
             logger.debug("Skipping disk cache write — empty collection")
             return
+        # Don't overwrite a larger cached collection with a smaller/partial one
+        try:
+            if _DISK_CACHE_PATH.exists():
+                existing = json.loads(_DISK_CACHE_PATH.read_text())
+                existing_count = len(existing.get("items", []))
+                if existing_count > len(items):
+                    logger.debug(
+                        f"Skipping disk cache write — new collection ({len(items)}) "
+                        f"smaller than existing ({existing_count})"
+                    )
+                    return
+        except Exception:
+            pass
         _DISK_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
         _DISK_CACHE_PATH.write_text(json.dumps({"root_hash": root_hash, "items": items}))
     except Exception as e:

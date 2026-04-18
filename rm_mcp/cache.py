@@ -39,10 +39,14 @@ _DISK_CACHE_PATH = (
 )
 
 
-def _load_disk_collection_cache() -> bool:
+def _load_disk_collection_cache(ignore_ttl: bool = False) -> bool:
     """
     Load collection cache from disk if it exists and is within TTL.
     Returns True if cache was loaded successfully.
+
+    Args:
+        ignore_ttl: If True, load even if the cache is stale (used as fallback
+                    when the API is rate-limiting).
     """
     global _cached_collection, _cached_root_hash, _cache_timestamp
 
@@ -50,7 +54,7 @@ def _load_disk_collection_cache() -> bool:
         if not _DISK_CACHE_PATH.exists():
             return False
         mtime = _DISK_CACHE_PATH.stat().st_mtime
-        if (time.time() - mtime) >= _CACHE_TTL_SECONDS:
+        if not ignore_ttl and (time.time() - mtime) >= _CACHE_TTL_SECONDS:
             return False  # Stale
 
         data = json.loads(_DISK_CACHE_PATH.read_text())
@@ -183,7 +187,7 @@ def get_cached_collection() -> Tuple[Any, List]:
         current_hash = client.get_root_hash()
     except Exception as e:
         # On 429 or other transient error, fall back to stale disk cache if available
-        _load_disk_collection_cache()
+        _load_disk_collection_cache(ignore_ttl=True)
         if _cached_collection is not None:
             n = len(_cached_collection)
             logger.warning(f"Root hash fetch failed ({e}), serving stale cache ({n} items)")

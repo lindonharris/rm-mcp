@@ -5,9 +5,11 @@ Consolidates all cache instances and their access functions from
 api.py, extract.py, and tools.py into one module.
 """
 
+import json
 import logging
 import os
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -26,6 +28,94 @@ try:
 except ValueError:
     logger.warning("Invalid REMARKABLE_CACHE_TTL value, using default of 60 seconds")
     _CACHE_TTL_SECONDS = 60
+
+# Disk cache for collection — survives process restarts.
+# Prevents 429s when multiple Claude sessions start concurrently.
+_DISK_CACHE_PATH = (
+    Path(
+        os.environ.get("REMARKABLE_INDEX_PATH", str(Path.home() / ".cache" / "rm-mcp" / "index.db"))
+    ).parent
+    / "collection-cache.json"
+)
+
+
+def _load_disk_collection_cache() -> bool:
+    """
+    Load collection cache from disk if it exists and is within TTL.
+    Returns True if cache was loaded successfully.
+    """
+    global _cached_collection, _cached_root_hash, _cache_timestamp
+
+    try:
+        if not _DISK_CACHE_PATH.exists():
+            return False
+        mtime = _DISK_CACHE_PATH.stat().st_mtime
+        if (time.time() - mtime) >= _CACHE_TTL_SECONDS:
+            return False  # Stale
+
+        data = json.loads(_DISK_CACHE_PATH.read_text())
+        from rm_mcp.models import Document
+
+        items = []
+        for d in data.get("items", []):
+            last_modified = d.get("last_modified")
+            if last_modified is not None:
+                from datetime import datetime
+
+                try:
+                    last_modified = datetime.fromisoformat(last_modified)
+                except (ValueError, TypeError):
+                    last_modified = None
+            items.append(
+                Document(
+                    id=d["id"],
+                    hash=d["hash"],
+                    name=d["name"],
+                    doc_type=d["doc_type"],
+                    parent=d.get("parent", ""),
+                    deleted=d.get("deleted", False),
+                    pinned=d.get("pinned", False),
+                    last_modified=last_modified,
+                    size=d.get("size", 0),
+                    files=d.get("files", []),
+                    synced=d.get("synced", True),
+                )
+            )
+        _cached_collection = items
+        _cached_root_hash = data.get("root_hash")
+        _cache_timestamp = mtime
+        logger.debug(f"Loaded {len(items)} items from disk collection cache")
+        return True
+    except Exception as e:
+        logger.debug(f"Failed to load disk collection cache: {e}")
+        return False
+
+
+def _save_disk_collection_cache(collection: list, root_hash: Optional[str]) -> None:
+    """Persist collection to disk so the next process start can skip the API call."""
+    try:
+        items = []
+        for doc in collection:
+            lm = doc.last_modified
+            items.append(
+                {
+                    "id": doc.id,
+                    "hash": doc.hash,
+                    "name": doc.name,
+                    "doc_type": doc.doc_type,
+                    "parent": doc.parent,
+                    "deleted": doc.deleted,
+                    "pinned": doc.pinned,
+                    "last_modified": lm.isoformat() if lm is not None else None,
+                    "size": doc.size,
+                    "files": doc.files,
+                    "synced": doc.synced,
+                }
+            )
+        _DISK_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _DISK_CACHE_PATH.write_text(json.dumps({"root_hash": root_hash, "items": items}))
+    except Exception as e:
+        logger.debug(f"Failed to save disk collection cache: {e}")
 
 
 def get_cached_collection() -> Tuple[Any, List]:
@@ -50,10 +140,17 @@ def get_cached_collection() -> Tuple[Any, List]:
         raise RuntimeError("Not authenticated. Run: uvx rm-mcp --setup")
     now = time.time()
 
-    # If we have a valid cache within TTL, return immediately
+    # If we have a valid in-memory cache within TTL, return immediately
     if _cached_collection is not None and (now - _cache_timestamp) < _CACHE_TTL_SECONDS:
         logger.debug("Collection cache hit (within TTL)")
         return client, _cached_collection
+
+    # Try disk cache before making any network requests
+    if _cached_collection is None and _load_disk_collection_cache():
+        age = time.time() - _cache_timestamp
+        if _cached_collection is not None and age < _CACHE_TTL_SECONDS:
+            logger.debug("Collection cache hit (disk)")
+            return client, _cached_collection
 
     # Check if client supports root hash (for change detection)
     if not hasattr(client, "get_root_hash"):
@@ -84,6 +181,7 @@ def get_cached_collection() -> Tuple[Any, List]:
     _cached_collection = collection
     _cached_root_hash = current_hash
     _cache_timestamp = time.time()
+    _save_disk_collection_cache(collection, current_hash)
     return client, collection
 
 
@@ -117,6 +215,7 @@ def set_cached_collection(client, collection, root_hash: Optional[str] = None) -
         except Exception:
             pass
     _cache_timestamp = time.time()
+    _save_disk_collection_cache(collection, _cached_root_hash)
 
 
 def invalidate_collection_cache() -> None:

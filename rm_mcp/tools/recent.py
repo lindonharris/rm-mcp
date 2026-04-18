@@ -50,12 +50,17 @@ def remarkable_recent(
                 continue
             documents.append(item)
 
-        documents.sort(
-            key=lambda x: (
-                x.ModifiedClient if hasattr(x, "ModifiedClient") and x.ModifiedClient else ""
-            ),
-            reverse=True,
-        )
+        from datetime import datetime
+
+        def _sort_key(x):
+            mc = x.ModifiedClient if hasattr(x, "ModifiedClient") else None
+            if isinstance(mc, datetime):
+                return (1, mc.isoformat())
+            if isinstance(mc, str) and mc:
+                return (1, mc)
+            return (0, "")
+
+        documents.sort(key=_sort_key, reverse=True)
 
         results = []
         for doc in documents[:limit]:

@@ -179,8 +179,10 @@ async def _prefetch_loop(shutdown_event: asyncio.Event) -> None:
                     docs_to_render.append(item)
 
             # Sort: most recently modified first
+            from datetime import datetime as _dt
+
             docs_to_render.sort(
-                key=lambda d: d.last_modified or "",
+                key=lambda d: d.last_modified if isinstance(d.last_modified, _dt) else _dt.min,
                 reverse=True,
             )
             docs_to_render = docs_to_render[:max_docs]

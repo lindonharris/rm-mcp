@@ -181,8 +181,14 @@ def get_cached_collection() -> Tuple[Any, List]:
     # Cloud mode: check root hash to see if anything changed
     try:
         current_hash = client.get_root_hash()
-    except Exception:
-        # If root hash fetch fails, do a full re-fetch
+    except Exception as e:
+        # On 429 or other transient error, fall back to stale disk cache if available
+        _load_disk_collection_cache()
+        if _cached_collection is not None:
+            n = len(_cached_collection)
+            logger.warning(f"Root hash fetch failed ({e}), serving stale cache ({n} items)")
+            return client, _cached_collection
+        # No cache at all — try a full re-fetch as last resort
         collection = client.get_meta_items()
         _cached_collection = collection
         _cache_timestamp = time.time()

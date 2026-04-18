@@ -54,6 +54,9 @@ def _load_disk_collection_cache() -> bool:
             return False  # Stale
 
         data = json.loads(_DISK_CACHE_PATH.read_text())
+        if not data.get("items"):
+            return False  # Reject empty/poisoned cache
+
         from rm_mcp.models import Document
 
         items = []
@@ -112,6 +115,9 @@ def _save_disk_collection_cache(collection: list, root_hash: Optional[str]) -> N
                     "synced": doc.synced,
                 }
             )
+        if not items:
+            logger.debug("Skipping disk cache write — empty collection")
+            return
         _DISK_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
         _DISK_CACHE_PATH.write_text(json.dumps({"root_hash": root_hash, "items": items}))
     except Exception as e:

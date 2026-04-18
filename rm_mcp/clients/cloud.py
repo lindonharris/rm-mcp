@@ -84,13 +84,13 @@ class RemarkableClient:
             "Re-authenticate by running: uvx rm-mcp --setup"
         )
 
-    def _request(self, url: str, method: str = "GET") -> requests.Response:
+    def _request(self, url: str, method: str = "GET", timeout: int = 60) -> requests.Response:
         """Make an authenticated request using the pooled session."""
         if not self.user_token:
             self.renew_token()
 
         headers = {"Authorization": f"Bearer {self.user_token}"}
-        response = self._session.request(method, url, headers=headers, timeout=60)
+        response = self._session.request(method, url, headers=headers, timeout=timeout)
 
         if response.status_code == 401:
             # Token expired, try to renew (thread-safe)
@@ -140,11 +140,15 @@ class RemarkableClient:
 
         return entries
 
-    def get_root_hash(self) -> str:
+    def get_root_hash(self, timeout: int = 60) -> str:
         """Fetch the current root hash from the cloud.
 
         This is a lightweight check (single HTTP request) to determine
         if the document library has changed since the last full fetch.
+
+        Args:
+            timeout: HTTP timeout in seconds. Use a short timeout (e.g. 3s)
+                when a stale cache is available as fallback.
 
         Returns:
             The root hash string
@@ -152,7 +156,7 @@ class RemarkableClient:
         Raises:
             RuntimeError: If the API response is invalid or empty
         """
-        response = self._request(ROOT_URL)
+        response = self._request(ROOT_URL, timeout=timeout)
         response.raise_for_status()
 
         if not response.text or not response.text.strip():

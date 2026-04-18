@@ -168,12 +168,16 @@ def get_cached_collection() -> Tuple[Any, List]:
         logger.debug("Collection cache hit (within TTL)")
         return client, _cached_collection
 
-    # Try disk cache before making any network requests
-    if _cached_collection is None and _load_disk_collection_cache():
-        age = time.time() - _cache_timestamp
-        if _cached_collection is not None and age < _CACHE_TTL_SECONDS:
-            logger.debug("Collection cache hit (disk)")
-            return client, _cached_collection
+    # On cold start, always preload the disk cache (even if stale) so we have
+    # data to serve immediately if the API is slow or rate-limited.
+    if _cached_collection is None:
+        _load_disk_collection_cache(ignore_ttl=True)
+        if _cached_collection is not None:
+            age = time.time() - _cache_timestamp
+            if age < _CACHE_TTL_SECONDS:
+                logger.debug("Collection cache hit (disk, fresh)")
+                return client, _cached_collection
+            logger.debug(f"Loaded stale disk cache ({len(_cached_collection)} items) as fallback")
 
     # Check if client supports root hash (for change detection)
     if not hasattr(client, "get_root_hash"):
@@ -182,12 +186,14 @@ def get_cached_collection() -> Tuple[Any, List]:
         _cache_timestamp = time.time()
         return client, collection
 
-    # Cloud mode: check root hash to see if anything changed
+    # Cloud mode: check root hash to see if anything changed.
+    # Use a short timeout (3s) when we have fallback data, so a tarpit 429
+    # doesn't block the tool call for 8+ seconds.
+    hash_timeout = 3 if _cached_collection is not None else 60
     try:
-        current_hash = client.get_root_hash()
+        current_hash = client.get_root_hash(timeout=hash_timeout)
     except Exception as e:
-        # On 429 or other transient error, fall back to stale disk cache if available
-        _load_disk_collection_cache(ignore_ttl=True)
+        # On 429 or other transient error, serve stale cache if we preloaded one
         if _cached_collection is not None:
             n = len(_cached_collection)
             logger.warning(f"Root hash fetch failed ({e}), serving stale cache ({n} items)")
